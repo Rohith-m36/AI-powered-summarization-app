@@ -7,7 +7,7 @@ from dotenv import load_dotenv
 from langchain.prompts import PromptTemplate
 from langchain_groq import ChatGroq
 from langchain.chains.summarize import load_summarize_chain
-from langchain_community.document_loaders import YoutubeLoader, UnstructuredURLLoader
+from langchain.document_loaders import YoutubeLoader, UnstructuredURLLoader
 from langchain.schema import Document
 
 # -----------------------------
@@ -15,6 +15,7 @@ from langchain.schema import Document
 # -----------------------------
 load_dotenv()
 groq_api_key = os.getenv("GROQ_API_KEY")
+
 if not groq_api_key:
     st.error("🚨 No Groq API key found! Please set GROQ_API_KEY in your .env file.")
     st.stop()
@@ -23,6 +24,7 @@ if not groq_api_key:
 # Streamlit Dashboard UI
 # -----------------------------
 st.set_page_config(page_title="Professional Summarizer Dashboard", page_icon="🦜", layout="wide")
+
 st.title("🦜 Professional Summarizer Dashboard")
 st.markdown(
     "<p style='color:#6C757D;'>Summarize YouTube videos or websites with clean, structured output and important links only.</p>",
@@ -36,43 +38,48 @@ st.sidebar.header("⚙️ Summary Options")
 summary_length = st.sidebar.slider("Summary length (approx. words)", 100, 1000, 300)
 show_links = st.sidebar.checkbox("Include important links only", value=True)
 summary_style = st.sidebar.selectbox("Summary style", ["Bullet Points", "Numbered List", "Paragraph"])
+
 generic_url = st.text_input("Enter YouTube or Website URL")
 
 # -----------------------------
 # Initialize LLM
 # -----------------------------
-llm = ChatGroq(model="llama-3.1-8b-instant", groq_api_key=groq_api_key)
+try:
+    llm = ChatGroq(model="llama-3.1-8b-instant", groq_api_key=groq_api_key)
+except Exception as e:
+    st.error(f"⚠️ Failed to initialize Groq model: {str(e)}")
+    st.stop()
 
 # -----------------------------
 # Prompt Templates
 # -----------------------------
 map_prompt = PromptTemplate(
-    template=f"""
-Summarize the following content in a {summary_style.lower()}. Highlight key points, important facts, or actionable items.
+    template="""
+Summarize the following content in a {style}. Highlight key points, important facts, or actionable items.
 
 Content:
-{{text}}
+{text}
 
 Summary:
 """,
-    input_variables=["text"]
+    input_variables=["text", "style"]
 )
 
 combine_prompt = PromptTemplate(
-    template=f"""
+    template="""
 You are an expert summarizer. Combine the following text summaries into a single, well-structured, readable summary.
 - Use headings for main topics
-- Format as {summary_style.lower()}
+- Format as {style}
 - Keep it concise and easy to read
-- Make it around {summary_length} words
+- Make it around {length} words
 - After the summary, list all **important URLs/links** found (ignore social media or irrelevant links)
 
 Summaries:
-{{text}}
+{text}
 
 Final Structured Summary with Links:
 """,
-    input_variables=["text"]
+    input_variables=["text", "style", "length"]
 )
 
 # -----------------------------
@@ -97,6 +104,7 @@ def load_docs(url):
             loader = YoutubeLoader.from_youtube_url(url, add_video_info=True)
             docs = loader.load()
         except Exception:
+            # fallback: use yt-dlp to extract text
             try:
                 result = subprocess.run(
                     ["yt-dlp", "--get-title", "--get-description", url],
@@ -114,9 +122,11 @@ def load_docs(url):
                 urls=[url],
                 ssl_verify=False,
                 headers={
-                    "User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5_1) "
-                                  "AppleWebKit/537.36 (KHTML, like Gecko) "
-                                  "Chrome/116.0.0.0 Safari/537.36"
+                    "User-Agent": (
+                        "Mozilla/5.0 (Macintosh; Intel Mac OS X 13_5_1) "
+                        "AppleWebKit/537.36 (KHTML, like Gecko) "
+                        "Chrome/116.0.0.0 Safari/537.36"
+                    )
                 }
             )
             docs = loader.load()
@@ -152,9 +162,14 @@ if st.button("🦜 Generate Summary"):
                         combine_prompt=combine_prompt
                     )
 
-                    # ✅ Use .invoke instead of .run
-                    result = chain.invoke({"input_documents": docs})
-                    output_summary = result["output_text"]
+                    # ✅ Pass parameters properly
+                    result = chain.invoke({
+                        "input_documents": docs,
+                        "style": summary_style.lower(),
+                        "length": summary_length
+                    })
+
+                    output_summary = result.get("output_text", "⚠️ No summary generated.")
 
                     # --------- Tabs for Dashboard ----------
                     tab1, tab2, tab3 = st.tabs(["📄 Summary", "🔗 Links", "📊 Stats"])
@@ -172,10 +187,11 @@ if st.button("🦜 Generate Summary"):
                         if show_links and links:
                             st.markdown(
                                 "<div style='background-color:#e8f0fe; padding:15px; border-radius:10px;'>"
-                                "<h4 style='color:#1A73E8;'>Important Links</h4>", unsafe_allow_html=True
+                                "<h4 style='color:#1A73E8;'>Important Links</h4>",
+                                unsafe_allow_html=True
                             )
                             for link in links:
-                                st.markdown(f"- {link}")
+                                st.markdown(f"- [{link}]({link})")
                             st.markdown("</div>", unsafe_allow_html=True)
                         else:
                             st.info("No important links found or link display disabled.")
