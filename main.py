@@ -4,11 +4,13 @@ import os
 import subprocess
 import re
 from dotenv import load_dotenv
-from langchain.prompts import PromptTemplate
+
+# --- LangChain v1.0 Imports ---
+from langchain_core.prompts import PromptTemplate
 from langchain_groq import ChatGroq
-from langchain.chains.summarize import load_summarize_chain
-from langchain.document_loaders import YoutubeLoader, UnstructuredURLLoader
-from langchain.schema import Document
+from langchain_community.document_loaders import YoutubeLoader, UnstructuredURLLoader
+from langchain_core.documents import Document
+from langchain_core.output_parsers import StrOutputParser
 
 # -----------------------------
 # Load environment variables
@@ -23,7 +25,7 @@ if not groq_api_key:
 # -----------------------------
 # Streamlit Dashboard UI
 # -----------------------------
-st.set_page_config(page_title="Professional Summarizer Dashboard", page_icon="🦜", layout="wide")
+st.set_page_config(page_title="🦜 Professional Summarizer", page_icon="🦜", layout="wide")
 
 st.title("🦜 Professional Summarizer Dashboard")
 st.markdown(
@@ -42,7 +44,7 @@ summary_style = st.sidebar.selectbox("Summary style", ["Bullet Points", "Numbere
 generic_url = st.text_input("Enter YouTube or Website URL")
 
 # -----------------------------
-# Initialize LLM
+# Initialize LLM (Groq)
 # -----------------------------
 try:
     llm = ChatGroq(model="llama-3.1-8b-instant", groq_api_key=groq_api_key)
@@ -51,33 +53,17 @@ except Exception as e:
     st.stop()
 
 # -----------------------------
-# Prompt Templates
+# Prompt Template
 # -----------------------------
-map_prompt = PromptTemplate(
+prompt = PromptTemplate(
     template="""
-Summarize the following content in a {style}. Highlight key points, important facts, or actionable items.
+Summarize the following content in {style} format. 
+Keep it concise, well-structured (~{length} words), and easy to read.
 
 Content:
 {text}
 
 Summary:
-""",
-    input_variables=["text", "style"]
-)
-
-combine_prompt = PromptTemplate(
-    template="""
-You are an expert summarizer. Combine the following text summaries into a single, well-structured, readable summary.
-- Use headings for main topics
-- Format as {style}
-- Keep it concise and easy to read
-- Make it around {length} words
-- After the summary, list all **important URLs/links** found (ignore social media or irrelevant links)
-
-Summaries:
-{text}
-
-Final Structured Summary with Links:
 """,
     input_variables=["text", "style", "length"]
 )
@@ -135,7 +121,7 @@ def load_docs(url):
     return docs
 
 # -----------------------------
-# Summarization Logic
+# Summarization Logic (v1.0 LCEL)
 # -----------------------------
 if st.button("🦜 Generate Summary"):
     if not generic_url.strip():
@@ -148,28 +134,21 @@ if st.button("🦜 Generate Summary"):
                 docs = load_docs(generic_url)
 
                 if docs:
-                    # Extract links
                     all_text = " ".join([doc.page_content for doc in docs])
                     links = re.findall(r'https?://\S+', all_text)
                     if show_links:
                         links = filter_links(links)
 
-                    # Summarization chain
-                    chain = load_summarize_chain(
-                        llm,
-                        chain_type="map_reduce",
-                        map_prompt=map_prompt,
-                        combine_prompt=combine_prompt
-                    )
+                    # --- New LangChain v1.0 Summarization Chain ---
+                    summary_chain = prompt | llm | StrOutputParser()
 
-                    # ✅ Pass parameters properly
-                    result = chain.invoke({
-                        "input_documents": docs,
+                    result = summary_chain.invoke({
+                        "text": all_text,
                         "style": summary_style.lower(),
                         "length": summary_length
                     })
 
-                    output_summary = result.get("output_text", "⚠️ No summary generated.")
+                    output_summary = result or "⚠️ No summary generated."
 
                     # --------- Tabs for Dashboard ----------
                     tab1, tab2, tab3 = st.tabs(["📄 Summary", "🔗 Links", "📊 Stats"])
